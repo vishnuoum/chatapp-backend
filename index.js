@@ -1,6 +1,9 @@
 const express = require("express");
 require('dotenv').config();
+const cors = require('cors');
 const app = express();
+app.use(cors())
+app.use(express.json());
 const http = require('http');
 const server = http.createServer(app);
 const db = require('./db');
@@ -12,28 +15,134 @@ const io = require('socket.io')(server, {
 
 const userSocketMap = {};
 
+const saveMessageToDB = async (data) => {
+    await db.query(`Insert into chats(text, sender_id, receiver_id, group_id, datetime)
+        values(?, ?, ?, ?, ?)`,
+        [data.text, data.sender_id, data.receiver_id, data.group_id, data.datetime]);
+    console.log("Message saved to DB");
+
+    if (!data.group_id) {
+        await db.query(`Insert into chat_summary(user_id, chat_id, type, last_message, last_datetime)
+        values
+        (?, ?, ?, ?, ?),
+        (?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            last_message = VALUES(last_message),
+            last_datetime = VALUES(last_datetime);`,
+            [
+                data.sender_id, data.receiver_id, "individual", data.text, data.datetime,
+                data.receiver_id, data.sender_id, "individual", data.text, data.datetime
+            ]);
+    }
+
+
+    console.log("Message saved to DB");
+}
+
 
 io.on('connection', socket => {
     console.log("user connected" + socket.id)
     socket.on('send', data => {
         console.log("message at server");
-        socket.to(userSocketMap[data["receiverId"]]).emit("receive", data)
+        console.log(data)
+        data["datetime"] = new Date().toISOString();
+        saveMessageToDB(data);
+        console.log(userSocketMap);
+        console.log("emitting to socket: " + userSocketMap[String(data["receiver_id"])])
+        socket.to(userSocketMap[String(data["receiver_id"])]).emit("receive", data)
     });
     socket.on('disconnect', () => { console.log("user disconnected") });
 
     socket.on("register", data => {
         console.log("User registering " + JSON.stringify(data))
-        userSocketMap[data["userId"]] = socket.id;
+        userSocketMap[data["user_id"]] = socket.id;
+        console.log(userSocketMap)
     })
 });
 
-app.get("/", async (req, res) => {
+app.get("/", (req, res) => {
+    res.send("Hi")
+})
+
+app.post("/login", async (req, res) => {
+    console.log(req.body);
+    requestBody = req.body;
     try {
-        const rows = await db.query('SELECT * FROM users');
+        const rows = await db.query('SELECT phone FROM users where phone=? and password = SHA2(?, 256)',
+            [requestBody.phone, requestBody.password]);
+        if (rows.length !== 1) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        res.json(rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'DB error: ' + err.sqlMessage });
+    }
+});
+
+app.post("/signup", async (req, res) => {
+    console.log(req.body);
+    requestBody = req.body;
+    try {
+        const rows = await db.query('Insert into users(username, phone, password) values (?, ?, SHA2(?, 256))',
+            [requestBody.username, requestBody.phone, requestBody.password]);
+        res.json({ "phone": requestBody.phone });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'DB error: ' + err.code });
+    }
+});
+
+app.post("/getUsername", async (req, res) => {
+    console.log(req.body);
+    requestBody = req.body;
+    try {
+        const rows = await db.query('Select username as title from users where phone = ?',
+            [requestBody.phone]);
+        console.log("get username: " + JSON.stringify(rows))
+        if (rows.length !== 1) {
+            return res.status(401).json({ error: 'Invalid userId' });
+        }
+        res.json(rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'DB error: ' + err.code });
+    }
+});
+
+app.post("/getGroupName", async (req, res) => {
+    console.log(req.body);
+    requestBody = req.body;
+    try {
+        const rows = await db.query('Select name from groups where id = ?',
+            [requestBody.group_id]);
+        if (rows.length !== 1) {
+            return res.status(401).json({ error: 'Invalid groupId' });
+        }
+        res.json(rows[0]);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'DB error: ' + err.code });
+    }
+});
+
+app.post("/getChatSummary", async (req, res) => {
+    console.log(req.body);
+    requestBody = req.body;
+    try {
+        const rows = await db.query(`
+            SELECT 
+                cs.chat_id, type, last_message, last_datetime, COALESCE(g.name, u.username) AS title 
+            FROM chat_summary cs 
+                LEFT JOIN groups g ON cs.chat_id = g.id AND cs.type = 'group' 
+                LEFT JOIN users u ON cs.chat_id = u.phone AND cs.type = 'individual' 
+            WHERE user_id = ?
+            ORDER BY cs.last_datetime DESC;`,
+            [requestBody.user_id]);
         res.json(rows);
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'DB error' });
+        res.status(500).json({ error: 'DB error: ' + err.code });
     }
 });
 
