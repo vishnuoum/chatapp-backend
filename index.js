@@ -146,4 +146,37 @@ app.post("/getChatSummary", async (req, res) => {
     }
 });
 
+
+app.post("/getMessages", async (req, res) => {
+    console.log(req.body);
+    requestBody = req.body;
+    try {
+        if (!requestBody.group_id) {
+            const rows = await db.query(`
+            SELECT 
+                * 
+            FROM chats 
+            WHERE (sender_id = ? AND receiver_id = ?) 
+            OR 
+            (sender_id = ? AND receiver_id = ?)
+            ORDER BY datetime DESC;`,
+                [requestBody.user_id, requestBody.chat_id, requestBody.chat_id, requestBody.user_id]);
+            res.json(rows);
+        } else {
+            const rows = await db.query(`
+            SELECT 
+                * 
+            FROM chats 
+            WHERE group_id=?
+            ORDER BY datetime DESC;`,
+                [requestBody.group_id]);
+            res.json(rows);
+        }
+
+    } catch (err) {
+        console.error(err);
+        res.json([]);
+    }
+});
+
 server.listen(8000, () => console.log("Server started on port 8000"));
