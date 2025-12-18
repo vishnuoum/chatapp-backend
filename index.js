@@ -33,6 +33,10 @@ const saveMessageToDB = async (data) => {
                 data.sender_id, data.receiver_id, "individual", data.text, data.datetime,
                 data.receiver_id, data.sender_id, "individual", data.text, data.datetime
             ]);
+    } else {
+        await db.query(`Update chat_summary set last_message = ?, last_datetime = ? where type = 'group' and chat_id=?`,
+            [data.text, data.datetime, data.group_id]
+        )
     }
 
 
@@ -43,19 +47,40 @@ const saveMessageToDB = async (data) => {
 io.on('connection', socket => {
     console.log("user connected" + socket.id)
     socket.on('send', data => {
-        console.log("message at server");
-        console.log(data)
+
         data["datetime"] = new Date().toISOString();
         saveMessageToDB(data);
-        console.log(userSocketMap);
-        console.log("emitting to socket: " + userSocketMap[String(data["receiver_id"])])
-        socket.to(userSocketMap[String(data["receiver_id"])]).emit("receive", data)
+        if (data["receiver_id"]) {
+            console.log("message at server");
+            console.log(data)
+            console.log(userSocketMap);
+            console.log("emitting to socket: " + userSocketMap[String(data["receiver_id"])])
+            socket.to(userSocketMap[String(data["receiver_id"])]).emit("receive", data)
+        } if (data["group_id"]) {
+            console.log(data)
+            console.log(`emitting to group: group_${data["group_id"]}`)
+            socket.to(`group_${data["group_id"]}`).emit("receive", data);
+        }
     });
     socket.on('disconnect', () => { console.log("user disconnected") });
 
     socket.on("register", data => {
         console.log("User registering " + JSON.stringify(data))
         userSocketMap[data["user_id"]] = socket.id;
+        const joinGroupOnConenct = async () => {
+            try {
+                const groups = await db.query(`Select group_id from group_members where user_id=?`, [data["user_id"]]);
+                console.log("groups " + JSON.stringify(groups));
+                groups.map(group => {
+                    socket.join(`group_${group.group_id}`)
+                    console.log(`User ${data["user_id"]} joined in group_${group.group_id}`)
+                })
+            } catch (err) {
+                console.error(err);
+            }
+
+        }
+        joinGroupOnConenct()
         console.log(userSocketMap)
     })
 });
