@@ -83,6 +83,11 @@ io.on('connection', socket => {
         joinGroupOnConenct()
         console.log(userSocketMap)
     })
+
+    socket.on("joinGroup", data => {
+        socket.join(`group_${data.group_id}`)
+        console.log(`User ${data.user_id} joined in group_${data.group_id}`)
+    })
 });
 
 app.get("/", (req, res) => {
@@ -136,10 +141,10 @@ app.post("/getUsername", async (req, res) => {
 });
 
 app.post("/getGroupName", async (req, res) => {
-    console.log(req.body);
+    console.log("get group name", req.body);
     requestBody = req.body;
     try {
-        const rows = await db.query('Select name from groups where id = ?',
+        const rows = await db.query('Select name as title from groups where id = ?',
             [requestBody.group_id]);
         if (rows.length !== 1) {
             return res.status(401).json({ error: 'Invalid groupId' });
@@ -203,5 +208,48 @@ app.post("/getMessages", async (req, res) => {
         res.json([]);
     }
 });
+
+app.post("/createGroup", async (req, res) => {
+    console.log(req.body);
+    requestBody = req.body;
+    try {
+        if (requestBody.members && requestBody.members.length > 0) {
+            const rows = await db.query(`
+                INSERT INTO groups(name, admin)
+                VALUES(?, ?)`, [requestBody.name, requestBody.user_id]);
+
+            const groupId = rows.insertId;
+            console.log("created group with id", groupId)
+
+            await db.query(`
+                INSERT INTO group_members(group_id, user_id)
+                VALUES
+                ?`, [requestBody.members.map(member => [groupId, member])]);
+
+            const now = new Date();
+            await db.query(`
+                INSERT INTO chat_summary(user_id, chat_id, type, last_message, last_datetime)
+                VALUES ?`,
+                [requestBody.members.map(member => [member, groupId, "group", "....", now])]);
+
+            io.to(
+                requestBody.members
+                    .map(uid => userSocketMap[String(uid)])
+                    .filter(Boolean)
+            ).emit("group_created", {
+                group_id: groupId,
+                name: requestBody.name
+            });
+
+            return res.json({ "group_id": groupId })
+        } else {
+            console.log("no request for creaing group")
+            res.sendStatus(500)
+        }
+    } catch (err) {
+        console.error(err);
+        res.sendStatus(500)
+    }
+})
 
 server.listen(8000, () => console.log("Server started on port 8000"));
