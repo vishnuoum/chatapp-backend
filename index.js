@@ -252,4 +252,41 @@ app.post("/createGroup", async (req, res) => {
     }
 })
 
+app.post("/addMembersToGroup", async (req, res) => {
+    console.log(req.body);
+    requestBody = req.body;
+    try {
+        if (requestBody.members && requestBody.members.length > 0) {
+
+            await db.query(`
+                INSERT INTO group_members(group_id, user_id)
+                VALUES
+                ?`, [requestBody.members.map(member => [requestBody.group_id, member])]);
+
+            const now = new Date();
+            await db.query(`
+                INSERT INTO chat_summary(user_id, chat_id, type, last_message, last_datetime)
+                VALUES ?`,
+                [requestBody.members.map(member => [member, requestBody.group_id, "group", "....", now])]);
+
+            io.to(
+                requestBody.members
+                    .map(uid => userSocketMap[String(uid)])
+                    .filter(Boolean)
+            ).emit("group_created", {
+                group_id: requestBody.group_id,
+                name: requestBody.name
+            });
+
+            return res.sendStatus(200)
+        } else {
+            console.log("no request for adding members to group")
+            res.sendStatus(500)
+        }
+    } catch (err) {
+        console.error(err);
+        res.sendStatus(500)
+    }
+})
+
 server.listen(8000, () => console.log("Server started on port 8000"));
